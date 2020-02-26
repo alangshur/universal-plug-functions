@@ -14,7 +14,7 @@ const SHARD_COUNT = 10;
 
 /*** USER FUNCTIONS ***/
 
-// (add user to firestore upon creation)
+// (AUTH) (add user to firestore upon creation)
 exports.addUser = functions.auth.user().onCreate(user => {
     return db.collection('users').doc(user.uid).set({
         paymentData: {},
@@ -22,7 +22,7 @@ exports.addUser = functions.auth.user().onCreate(user => {
     });
 });
 
-// (remove user from firestore upon deletion)
+// (AUTH) (remove user from firestore upon deletion)
 exports.removeUser = functions.auth.user().onDelete(user => {
     return db.collection('users').doc(user.uid).delete();
 });
@@ -31,7 +31,7 @@ exports.removeUser = functions.auth.user().onDelete(user => {
 
 /*** PROFILE FUNCTIONS ***/
 
-// (pick random shard on current profile to incremenet view count)
+// (HTTP) (pick random shard on current profile to incremenet view count)
 exports.registerView = functions.https.onRequest(async (request, response) => {
     try {
         const id = Math.floor(Math.random() * SHARD_COUNT);
@@ -54,7 +54,7 @@ exports.registerView = functions.https.onRequest(async (request, response) => {
     }
 });
 
-// (create new profile for current date with view shards)
+// (HTTP) (create new profile for current date with view shards)
 exports.createProfile = functions.https.onRequest(async (request, response) => {
     try {
         const date = getDateString();
@@ -73,26 +73,29 @@ exports.createProfile = functions.https.onRequest(async (request, response) => {
             link2: { link: 'http://www.youtube.com', media: 'youtube', text: 'alexlangshur' },
             link3: { link: 'http://www.google.com', media: 'website', text: 'alexlangshur.com' },
         })
-        .then(async () => {   
-            
-            // add view shards to sub-collection
-            const viewShardsRef = db.collection('profiles').doc(date).collection('viewShards');  
-            for (var i = 0; i < SHARD_COUNT; i++) await viewShardsRef.doc('shard' + i).set({ count: 0 });
-        });
+            .then(async () => {
+
+                // add view shards to sub-collection
+                const viewShardsRef = db.collection('profiles').doc(date).collection('viewShards');
+                for (var i = 0; i < SHARD_COUNT; i++) {
+                    await viewShardsRef.doc('shard' + i).set({ count: 0 });
+                }
+            });
 
         // return https response
-        return cors(request, response, () => {
+        cors(request, response, () => {
             response.send({ error: false });
         });
     }
     catch (err) {
         console.log('createProfile: ' + err);
-        return cors(request, response, () => {
+        cors(request, response, () => {
             response.send({ error: true });
         });
     }
 });
 
+// (SCHEDULE) (accumulate all shard views into total views)
 exports.updateViews = functions.pubsub.schedule('every 5 minutes').onRun(async (context) => {
     const date = getDateString();
     var totalCount = 0;
@@ -112,3 +115,26 @@ exports.updateViews = functions.pubsub.schedule('every 5 minutes').onRun(async (
 
 /* AUCTION FUNCTIONS */
 
+// (get current auction)
+exports.getCurrentAuction = functions.https.onRequest(async (request, response) => {
+    try {
+
+        // enforce authentication
+        const token = request.get('Authorization').split('Bearer ')[1];
+        await admin.auth().verifyIdToken(token)
+            .catch(err => { throw 'Not authorized'; });
+
+        const date = getDateString();
+        console.log(date);
+
+        cors(request, response, () => {
+            response.send({ error: true });
+        });
+    }
+    catch (err) {
+        console.log('getCurrentAuction: ' + err);
+        cors(request, response, () => {
+            response.send({ error: true });
+        });
+    }
+});
