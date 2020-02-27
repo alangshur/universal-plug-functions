@@ -43,13 +43,13 @@ exports.registerView = functions.https.onRequest(async (request, response) => {
 
         // return https response
         cors(request, response, () => {
-            response.send({ error: false });
+            response.send({ success: true });
         });
     }
     catch (err) {
         console.log('registerView: ' + err);
         cors(request, response, () => {
-            response.send({ error: true });
+            response.send({ success: false });
         });
     }
 });
@@ -84,13 +84,13 @@ exports.createProfile = functions.https.onRequest(async (request, response) => {
 
         // return https response
         cors(request, response, () => {
-            response.send({ error: false });
+            response.send({ success: true });
         });
     }
     catch (err) {
         console.log('createProfile: ' + err);
         cors(request, response, () => {
-            response.send({ error: true });
+            response.send({ success: false });
         });
     }
 });
@@ -115,26 +115,51 @@ exports.updateViews = functions.pubsub.schedule('every 5 minutes').onRun(async (
 
 /* AUCTION FUNCTIONS */
 
-// (get current auction)
-exports.getCurrentAuction = functions.https.onRequest(async (request, response) => {
+// (post bid to current auction)
+exports.bidCurrentAuction = functions.https.onRequest(async (request, response) => {
     try {
 
         // enforce authentication
-        const token = request.get('Authorization').split('Bearer ')[1];
+        var targetUser = undefined;
+        const token = request.get('Authorization');
         await admin.auth().verifyIdToken(token)
-            .catch(err => { throw 'Not authorized'; });
+            .then(decoded => { 
+                targetUser = decoded; 
+            }, err => { 
+                throw new Error('auth'); 
+            });
 
-        const date = getDateString();
-        console.log(date);
+        // fetch bid data
+        const bid = request.get('Bid');
 
+        console.log('Bid amount: ' + bid);
+        console.log('Bidding user: ' + targetUser);
+
+        //return https response
         cors(request, response, () => {
-            response.send({ error: true });
+            response.send({ 
+                success: true
+            });
         });
     }
     catch (err) {
         console.log('getCurrentAuction: ' + err);
+        var message = '';
+
+        // authentication error
+        if (err.message == 'auth')
+            message = 'Error authenticating user. Please sign in.'
+
+        // else if (err.message) {}
+
+        // miscellaneous error
+        else message = 'Unexpected server error. Please wait and try again.'
+
         cors(request, response, () => {
-            response.send({ error: true });
+            response.send({ 
+                success: false,
+                message: message
+            });
         });
     }
 });
