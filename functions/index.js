@@ -2,13 +2,13 @@ const functions = require('firebase-functions');
 var cors = require('cors')({ origin: true });
 const { getDateString } = require('./utils');
 
+// initialize constants
+const SHARD_COUNT = 10;
+
 // initialize admin SDK
 const admin = require('firebase-admin');
 admin.initializeApp(functions.config().firebase);
 const db = admin.firestore();
-
-// initialize constants
-const SHARD_COUNT = 10;
 
 
 
@@ -125,16 +125,14 @@ exports.updateViews = functions.pubsub.schedule('every 5 minutes').onRun(async (
         // update total views
         return db.collection('profiles').doc(date).update({ views: totalCount });
     }
-    catch (err) {
-        console.log('updateViews: ' + err);
-    }
+    catch (err) { console.log('updateViews: ' + err); }
 });
 
 
 
 /* AUCTION FUNCTIONS */
 
-// (UNSAFE) (post bid to current auction)
+// (SAFE) (post bid to current auction)
 exports.bidCurrentAuction = functions.https.onRequest(async (request, response) => {
     try {
 
@@ -149,44 +147,45 @@ exports.bidCurrentAuction = functions.https.onRequest(async (request, response) 
         var targetUser = undefined;
         const token = request.get('Authorization');
         await admin.auth().verifyIdToken(token)
-            .then(decoded => {
-                console.log(decoded);
-                targetUser = decoded;
-            }, err => {
-                throw new Error('auth');
-            });
+            .then(
+                decoded => { targetUser = decoded; }, 
+                err => { throw new Error('auth'); }
+            );
 
         // fetch bid data
-        const bid = request.get('Bid');
+        const bid = Number(request.get('Bid'));
         if (!bid) throw new Error('bid-r');
 
         // fetch current auction
-        // const date = getDateString();
-        // var auctionRef = db.collection('auctions').doc(date);
-        // await db.runTransaction(transaction => {
-        //     return transaction.get(auctionRef).then(auction => {
-        //         if (!auction.exists || !auction.data().current)
-        //             throw new Error('auction');
+        const date = getDateString();
+        var auctionRef = db.collection('auctions').doc(date);
+        await db.runTransaction(transaction => {
+            return transaction.get(auctionRef).then(auction => {
+                if (!auction.exists || !auction.data().current) throw new Error('auction');
 
-        //         // verify bid
-        //         const topBid = auction.data().bid;
-        //         if (bid <= topBid) throw new Error('bid-p');
+                // verify bid
+                const topBid = auction.data().bid;
+                if (bid <= topBid) throw new Error('bid-p');
 
-        //         // save bid
-        //         const bidCount = auction.data().bidCount;
-        //         var bidsRef = auctionRef.collection('bids').doc(String(bidCount));
-        //         transaction.set(bidsRef, {
-        //             bid: bid,
-        //             user: targetUser.user_id
-        //         })
-        //     });
-        // });
+                // save bid
+                const bidCount = auction.data().bidCount;
+                var bidsRef = auctionRef.collection('bids').doc(String(bidCount));
+                transaction.set(bidsRef, {
+                    bid: bid,
+                    user: targetUser.user_id
+                });
+
+                // update auction
+                transaction.update(auctionRef, {
+                    bid: bid,
+                    bidCount: admin.firestore.FieldValue.increment(1)
+                });
+            });
+        });
 
         // return https response
         cors(request, response, () => {
-            response.send({
-                success: true
-            });
+            response.send({ success: true });
         });
     }
     catch (err) {
