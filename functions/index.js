@@ -14,7 +14,7 @@ const SHARD_COUNT = 10;
 
 /*** USER FUNCTIONS ***/
 
-// (AUTH) (add user to firestore upon creation)
+// (SAFE) (AUTH) (add user to firestore upon creation)
 exports.addUser = functions.auth.user().onCreate(user => {
     return db.collection('users').doc(user.uid).set({
         paymentData: {},
@@ -22,7 +22,7 @@ exports.addUser = functions.auth.user().onCreate(user => {
     });
 });
 
-// (AUTH) (remove user from firestore upon deletion)
+// (SAFE) (AUTH) (remove user from firestore upon deletion)
 exports.removeUser = functions.auth.user().onDelete(user => {
     return db.collection('users').doc(user.uid).delete();
 });
@@ -31,13 +31,20 @@ exports.removeUser = functions.auth.user().onDelete(user => {
 
 /*** PROFILE FUNCTIONS ***/
 
-// (HTTP) (pick random shard on current profile to incremenet view count)
+// (SAFE) (HTTP) (pick random shard on current profile to incremenet view count)
 exports.registerView = functions.https.onRequest(async (request, response) => {
     try {
-        const id = Math.floor(Math.random() * SHARD_COUNT);
-        const date = getDateString();
+
+        // handle preflight
+        if (request.method == 'OPTIONS') {
+            return cors(request, response, () => {
+                response.send({ success: true });
+            });
+        }
 
         // update count on random shard
+        const id = Math.floor(Math.random() * SHARD_COUNT);
+        const date = getDateString();
         await db.collection('profiles').doc(date + '/viewShards/shard' + id)
             .update({ count: admin.firestore.FieldValue.increment(1) });
 
@@ -54,12 +61,19 @@ exports.registerView = functions.https.onRequest(async (request, response) => {
     }
 });
 
-// (HTTP) (create new profile for current date with view shards)
+// (UNSAFE) (HTTP) (create new profile for current date with view shards)
 exports.createProfile = functions.https.onRequest(async (request, response) => {
     try {
-        const date = getDateString();
+
+        // handle preflight
+        if (request.method == 'OPTIONS') {
+            return cors(request, response, () => {
+                response.send({ success: true });
+            });
+        }
 
         // add new profile
+        const date = getDateString();
         await db.collection('profiles').doc(date).set({
             date: date,
             current: true,
@@ -95,68 +109,101 @@ exports.createProfile = functions.https.onRequest(async (request, response) => {
     }
 });
 
-// (SCHEDULE) (accumulate all shard views into total views)
+// (SAFE) (SCHEDULE) (accumulate all shard views into total views)
 exports.updateViews = functions.pubsub.schedule('every 5 minutes').onRun(async (context) => {
-    const date = getDateString();
-    var totalCount = 0;
+    try {
+        const date = getDateString();
+        var totalCount = 0;
 
-    // count view shards
-    await db.collection('profiles/' + date + '/viewShards').get().then(shards => {
-        shards.forEach(shard => {
-            totalCount += shard.data().count;
+        // count view shards
+        await db.collection('profiles/' + date + '/viewShards').get().then(shards => {
+            shards.forEach(shard => {
+                totalCount += shard.data().count;
+            });
         });
-    });
 
-    // update total views
-    return db.collection('profiles').doc(date).update({ views: totalCount });
+        // update total views
+        return db.collection('profiles').doc(date).update({ views: totalCount });
+    }
+    catch (err) {
+        console.log('updateViews: ' + err);
+    }
 });
 
 
 
 /* AUCTION FUNCTIONS */
 
-// (post bid to current auction)
+// (UNSAFE) (post bid to current auction)
 exports.bidCurrentAuction = functions.https.onRequest(async (request, response) => {
     try {
+
+        // handle preflight
+        if (request.method == 'OPTIONS') {
+            return cors(request, response, () => {
+                response.send({ success: true });
+            });
+        }
 
         // enforce authentication
         var targetUser = undefined;
         const token = request.get('Authorization');
         await admin.auth().verifyIdToken(token)
-            .then(decoded => { 
-                targetUser = decoded; 
-            }, err => { 
-                throw new Error('auth'); 
+            .then(decoded => {
+                console.log(decoded);
+                targetUser = decoded;
+            }, err => {
+                throw new Error('auth');
             });
 
         // fetch bid data
         const bid = request.get('Bid');
+        if (!bid) throw new Error('bid-r');
 
-        console.log('Bid amount: ' + bid);
-        console.log('Bidding user: ' + targetUser);
+        // fetch current auction
+        // const date = getDateString();
+        // var auctionRef = db.collection('auctions').doc(date);
+        // await db.runTransaction(transaction => {
+        //     return transaction.get(auctionRef).then(auction => {
+        //         if (!auction.exists || !auction.data().current)
+        //             throw new Error('auction');
 
-        //return https response
+        //         // verify bid
+        //         const topBid = auction.data().bid;
+        //         if (bid <= topBid) throw new Error('bid-p');
+
+        //         // save bid
+        //         const bidCount = auction.data().bidCount;
+        //         var bidsRef = auctionRef.collection('bids').doc(String(bidCount));
+        //         transaction.set(bidsRef, {
+        //             bid: bid,
+        //             user: targetUser.user_id
+        //         })
+        //     });
+        // });
+
+        // return https response
         cors(request, response, () => {
-            response.send({ 
+            response.send({
                 success: true
             });
         });
     }
     catch (err) {
         console.log('getCurrentAuction: ' + err);
+
+        // choose error message
         var message = '';
-
-        // authentication error
-        if (err.message == 'auth')
-            message = 'Error authenticating user. Please sign in.'
-
-        // else if (err.message) {}
-
-        // miscellaneous error
-        else message = 'Unexpected server error. Please wait and try again.'
+        switch (err.message) {
+            case 'auth': message = 'Error authenticating user. Please sign in.'; break;
+            case 'bid-r': message = 'Error retrieving bid. Please wait and try again.'; break;
+            case 'bid-p': message = 'Error placing bid. Bid must be greater than top bid.'; break;
+            case 'auction': message = 'Error placing bid. The auction has ended.'; break;
+            default: message = 'Unexpected server error. Please wait and try again.';
+        }
 
         cors(request, response, () => {
-            response.send({ 
+            response.send({
                 success: false,
                 message: message
             });
